@@ -32,7 +32,7 @@ const (
 // tls package's behavior.
 // Returns a channel that will contain the archival result of the handshake.
 func connectAndHandshake(ctx context.Context, mode EchMode, ecl echConfigList, startTime time.Time,
-	address string, host string, logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
+	address string, target *url.URL, logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 
 	channel := make(chan model.ArchivalTLSOrQUICHandshakeResult)
 
@@ -48,11 +48,11 @@ func connectAndHandshake(ctx context.Context, mode EchMode, ecl echConfigList, s
 		var res *model.ArchivalTLSOrQUICHandshakeResult
 		switch mode {
 		case NoECH:
-			res = handshakeWithoutEch(ctx, conn, startTime, address, host, logger)
+			res = handshakeWithoutEch(ctx, conn, startTime, address, target, logger)
 		case GreaseECH:
-			res = handshakeWithGreaseyEch(ctx, conn, startTime, address, host, logger)
+			res = handshakeWithGreaseyEch(ctx, conn, startTime, address, target, logger)
 		case RealECH:
-			res = handshakeWithRealEch(ctx, conn, startTime, address, host, ecl, logger)
+			res = handshakeWithRealEch(ctx, conn, startTime, address, target, ecl, logger)
 		}
 		channel <- *res
 	}()
@@ -61,12 +61,12 @@ func connectAndHandshake(ctx context.Context, mode EchMode, ecl echConfigList, s
 }
 
 func handshakeWithoutEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, sni string, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-	return handshakeWithExtension(ctx, conn, zeroTime, address, sni, []utls.TLSExtension{}, logger)
+	address string, target *url.URL, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
+	return handshakeWithExtension(ctx, conn, zeroTime, address, target, []utls.TLSExtension{}, logger)
 }
 
 func handshakeWithGreaseyEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, sni string, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
+	address string, target *url.URL, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
 	payload, err := generateGreaseExtension(rand.Reader)
 	if err != nil {
 		panic("failed to generate grease ECH: " + err.Error())
@@ -77,9 +77,9 @@ func handshakeWithGreaseyEch(ctx context.Context, conn net.Conn, zeroTime time.T
 	utlsEchExtension.Id = echExtensionType
 	utlsEchExtension.Data = payload
 
-	hs := handshakeWithExtension(ctx, conn, zeroTime, address, sni, []utls.TLSExtension{&utlsEchExtension}, logger)
+	hs := handshakeWithExtension(ctx, conn, zeroTime, address, target, []utls.TLSExtension{&utlsEchExtension}, logger)
 	hs.ECHConfig = "GREASE"
-	hs.OuterServerName = sni
+	hs.OuterServerName = target.Hostname()
 	return hs
 }
 
@@ -94,14 +94,9 @@ func handshakeMaybePrintWithECH(doprint bool) string {
 // i.e. OuterServerName across all configs.  Host is the service to connect to, i.e.
 // the inner SNI.
 func handshakeWithRealEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, host string, ecl echConfigList, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
+	address string, target *url.URL, ecl echConfigList, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
 
-	// TODO: Use actual parsed URL from caller
-	parsed, err := url.Parse("https://" + host)
-	if err != nil {
-		panic("failed to parse host; validate hostname : " + err.Error())
-	}
-	tlsConfig := genEchTLSConfig(parsed.Hostname(), ecl)
+	tlsConfig := genEchTLSConfig(target.Hostname(), ecl)
 
 	ol := logx.NewOperationLogger(logger, "echcheck: TLSHandshakeWithRealECH")
 	start := time.Now()
@@ -117,15 +112,10 @@ func handshakeWithRealEch(ctx context.Context, conn net.Conn, zeroTime time.Time
 	return hs
 }
 
-func handshakeWithExtension(ctx context.Context, conn net.Conn, zeroTime time.Time, address string, sni string,
+func handshakeWithExtension(ctx context.Context, conn net.Conn, zeroTime time.Time, address string, target *url.URL,
 	extensions []utls.TLSExtension, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
 
-	// TODO: Use actual parsed URL from caller
-	parsed, err := url.Parse("https://" + sni)
-	if err != nil {
-		panic("failed to parse host; validate hostname : " + err.Error())
-	}
-	tlsConfig := genTLSConfig(parsed.Hostname())
+	tlsConfig := genTLSConfig(target.Hostname())
 
 	handshakerConstructor := newHandshakerWithExtensions(extensions)
 	tracedHandshaker := handshakerConstructor(log.Log, &utls.HelloFirefox_Auto)
