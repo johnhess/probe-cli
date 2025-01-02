@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"net"
+	"net/url"
 	"time"
 
 	"github.com/apex/log"
@@ -95,7 +96,12 @@ func handshakeMaybePrintWithECH(doprint bool) string {
 func handshakeWithRealEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
 	address string, host string, ecl echConfigList, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
 
-	tlsConfig := genEchTLSConfig(host, ecl)
+	// TODO: Use actual parsed URL from caller
+	parsed, err := url.Parse("https://" + host)
+	if err != nil {
+		panic("failed to parse host; validate hostname : " + err.Error())
+	}
+	tlsConfig := genEchTLSConfig(parsed.Hostname(), ecl)
 
 	ol := logx.NewOperationLogger(logger, "echcheck: TLSHandshakeWithRealECH")
 	start := time.Now()
@@ -113,7 +119,13 @@ func handshakeWithRealEch(ctx context.Context, conn net.Conn, zeroTime time.Time
 
 func handshakeWithExtension(ctx context.Context, conn net.Conn, zeroTime time.Time, address string, sni string,
 	extensions []utls.TLSExtension, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-	tlsConfig := genTLSConfig(sni)
+
+	// TODO: Use actual parsed URL from caller
+	parsed, err := url.Parse("https://" + sni)
+	if err != nil {
+		panic("failed to parse host; validate hostname : " + err.Error())
+	}
+	tlsConfig := genTLSConfig(parsed.Hostname())
 
 	handshakerConstructor := newHandshakerWithExtensions(extensions)
 	tracedHandshaker := handshakerConstructor(log.Log, &utls.HelloFirefox_Auto)

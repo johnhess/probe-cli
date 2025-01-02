@@ -70,8 +70,12 @@ func (m *Measurer) Run(
 	trace := measurexlite.NewTrace(0, args.Measurement.MeasurementStartTimeSaved)
 	resolver := trace.NewParallelDNSOverHTTPSResolver(args.Session.Logger(), m.config.resolverURL())
 	// We dial the alias, even when there are hints in the HTTPS record.
-	addrs, addrsErr := resolver.LookupHost(ctx, parsed.Host)
-	httpsRr, httpsErr := resolver.LookupHTTPS(ctx, parsed.Host)
+	addrs, addrsErr := resolver.LookupHost(ctx, parsed.Hostname())
+	var dnsQueryHost = parsed.Hostname()
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		dnsQueryHost = fmt.Sprintf("_%s._https.%s", parsed.Port(), parsed.Hostname())
+	}
+	httpsRr, httpsErr := resolver.LookupHTTPS(ctx, dnsQueryHost)
 	ol.Stop(err)
 	if addrsErr != nil {
 		return addrsErr
@@ -98,7 +102,11 @@ func (m *Measurer) Run(
 	}
 
 	runtimex.Assert(len(addrs) > 0, "expected at least one entry in addrs")
-	address := net.JoinHostPort(addrs[0], "443")
+	port := parsed.Port()
+	if port == "" {
+		port = "443"
+	}
+	address := net.JoinHostPort(addrs[0], port)
 
 	handshakes := []func() (chan model.ArchivalTLSOrQUICHandshakeResult, error){
 		// Handshake with no ECH
