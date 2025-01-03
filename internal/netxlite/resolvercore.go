@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -234,43 +235,34 @@ func (r *resolverIDNA) LookupHost(ctx context.Context, hostname string) ([]strin
 	return r.Resolver.LookupHost(ctx, host)
 }
 
+// HTTPS queries may be for either an IDNA-encodable domain or a
+// Port Prefix Named domain where the portion following the port
+// and service components is an IDNA-encodable domain.
 func (r *resolverIDNA) LookupHTTPS(
 	ctx context.Context, domain string) (*model.HTTPSSvc, error) {
-	// TODO: Determine where to safely ASCII-ize the non _-prefixed parts of the domain
 
-	// Here, we try to convert the domain to ASCII.
-	// But, leading with an underscore is no bueno.
+	idnable := domain
+	portPrefix := ""
+	if strings.HasPrefix(domain, "_") {
+		components := strings.Split(domain, ".")
+		port, err := strconv.Atoi(strings.TrimPrefix(components[0], "_"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid domain: %s", domain)
+		}
+		if len(components) >= 2 && components[1] == "_https" && port >= 0 && port <= 65535 {
+			idnable = strings.Join(components[2:], ".")
+			portPrefix = components[0] + "." + components[1] + "."
+		} else {
+			return nil, fmt.Errorf("invalid domain: %s", domain)
+		}
+	}
 
-	// It may be that this should only be applied to LookupHost
-
-	// RFC 5891: "Special naming conventions for SRV
-	// records (and "underscore labels" more generally) are incompatible
-	// with IDNA coding as discussed in the Definitions document [RFC5890],
-	// especially Section 2.3.2.3."
-	// RFC 5890 describes domains with a leading _ as "Non LDH" (Letter-Digit-Hyphen)
-	// "applications that are not IDNA-aware treat all LDH
-	// labels as valid for appearance in DNS zone files and queries and some
-	// of them may permit additional types of labels (i.e., not impose the
-	// LDH restriction)"
-	// "There are some standardized DNS label
-	// formats, such as the "underscore labels" used for service location
-	// (SRV) records [RFC2782], that do not fall into any of the three
-	// categories and hence are not internationalized labels."
-
-	// So we must ask, _should this be idna aware_?
-
-	// "Of course,
-	// non-ASCII IDN labels may be part of a domain name that also includes
-	// underscore labels."
-
-	// So, we probably want to IDNA the main part of the domain name but
-	// not the leading underscored parts.
-	// host, err := idnax.ToASCII(domain)
-	// if err != nil {
-	// 	fmt.Printf("IDNA Error: %s while converting %s to %s\n", err, domain, host)
-	// 	return nil, err
-	// }
-	return r.Resolver.LookupHTTPS(ctx, domain)
+	ldh, err := idnax.ToASCII(idnable)
+	if err != nil {
+		return nil, err
+	}
+	query := portPrefix + ldh
+	return r.Resolver.LookupHTTPS(ctx, query)
 }
 
 func (r *resolverIDNA) Network() string {
