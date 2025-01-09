@@ -2,18 +2,16 @@ package echcheck
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"net"
 	"net/url"
 	"time"
 
-	"github.com/apex/log"
 	"github.com/ooni/probe-cli/v3/internal/logx"
 	"github.com/ooni/probe-cli/v3/internal/measurexlite"
 	"github.com/ooni/probe-cli/v3/internal/model"
 	"github.com/ooni/probe-cli/v3/internal/netxlite"
-	utls "gitlab.com/yawning/utls.git"
 )
 
 const echExtensionType uint16 = 0xfe0d
@@ -26,128 +24,70 @@ const (
 	RealECH
 )
 
-// Connect to `host` at `address` and attempt a TLS handshake.  When using real ECH, `ecl` must
-// contain the ECHConfigList to use; in other modes, `ecl` is ignored. If the ECH config provides
-// a different OuterServerName than `host`, it will be recorded in the result and used per go's
-// tls package's behavior.
-// Returns a channel that will contain the archival result of the handshake.
-func connectAndHandshake(ctx context.Context, mode EchMode, ecl echConfigList, startTime time.Time,
-	address string, target *url.URL, logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
+func attemptHandshake(
+	ctx context.Context,
+	echConfigList []byte,
+	useRetryConfigs bool,
+	startTime time.Time,
+	address string,
+	target *url.URL,
+	logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 
 	channel := make(chan model.ArchivalTLSOrQUICHandshakeResult)
 
 	ol := logx.NewOperationLogger(logger, "echcheck: TCPConnect %s", address)
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	_, err := dialer.DialContext(ctx, "tcp", address)
 	ol.Stop(err)
 	if err != nil {
 		return nil, netxlite.NewErrWrapper(netxlite.ClassifyGenericError, netxlite.ConnectOperation, err)
 	}
 
 	go func() {
-		var res *model.ArchivalTLSOrQUICHandshakeResult
-		switch mode {
-		case NoECH:
-			res = handshakeWithoutEch(ctx, conn, startTime, address, target, logger)
-		case GreaseECH:
-			res = handshakeWithGreaseyEch(ctx, conn, startTime, address, target, logger)
-		case RealECH:
-			res = handshakeWithRealEch(ctx, conn, startTime, address, target, ecl, logger)
+		tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
+
+		ol := logx.NewOperationLogger(logger, "echcheck: DialTLS")
+		start := time.Now()
+		maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
+		if echErr, ok := err.(*tls.ECHRejectionError); ok && useRetryConfigs {
+			// This is a special case where the server rejected the ECH as expected.
+			newTLSConfig := genEchTLSConfig(target.Hostname(), echErr.RetryConfigList)
+			maybeTLSConn, err = tls.Dial("tcp", address, newTLSConfig)
 		}
-		channel <- *res
+		finish := time.Now()
+		ol.Stop(err)
+
+		var connState tls.ConnectionState
+		if err != nil {
+			connState = tls.ConnectionState{}
+		} else {
+			// If there's been an error, processing maybeTLSConn can panic.
+			connState = netxlite.MaybeTLSConnectionState(maybeTLSConn)
+		}
+		hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(startTime), "tcp", address, tlsConfig,
+			connState, err, finish.Sub(startTime))
+		// TODO: Support "GREASE" as a value here
+		hs.ECHConfig = base64.StdEncoding.EncodeToString(echConfigList)
+		if len(echConfigList) > 0 {
+			configs, err := parseECHConfigList(echConfigList)
+			if err != nil {
+				// TODO: Handle this.
+				panic("failed to parse ECH config list: " + err.Error())
+			}
+			hs.OuterServerName = string(configs[0].PublicName)
+		}
+		channel <- *hs
 	}()
 
 	return channel, nil
 }
 
-func handshakeWithoutEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, target *url.URL, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-	return handshakeWithExtension(ctx, conn, zeroTime, address, target, []utls.TLSExtension{}, logger)
-}
-
-func handshakeWithGreaseyEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, target *url.URL, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-	payload, err := generateGreaseExtension(rand.Reader)
-	if err != nil {
-		panic("failed to generate grease ECH: " + err.Error())
+func genEchTLSConfig(host string, echConfigList []byte) *tls.Config {
+	if len(echConfigList) == 0 {
+		return &tls.Config{ServerName: host}
 	}
-
-	var utlsEchExtension utls.GenericExtension
-
-	utlsEchExtension.Id = echExtensionType
-	utlsEchExtension.Data = payload
-
-	hs := handshakeWithExtension(ctx, conn, zeroTime, address, target, []utls.TLSExtension{&utlsEchExtension}, logger)
-	hs.ECHConfig = "GREASE"
-	hs.OuterServerName = target.Hostname()
-	return hs
-}
-
-func handshakeMaybePrintWithECH(doprint bool) string {
-	if doprint {
-		return "WithGreaseECH"
-	}
-	return ""
-}
-
-// ECHConfigList must be valid, non-empty, and to specify only one unique PublicName,
-// i.e. OuterServerName across all configs.  Host is the service to connect to, i.e.
-// the inner SNI.
-func handshakeWithRealEch(ctx context.Context, conn net.Conn, zeroTime time.Time,
-	address string, target *url.URL, ecl echConfigList, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-
-	tlsConfig := genEchTLSConfig(target.Hostname(), ecl)
-
-	ol := logx.NewOperationLogger(logger, "echcheck: TLSHandshakeWithRealECH")
-	start := time.Now()
-	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
-	finish := time.Now()
-	ol.Stop(err)
-
-	connState := netxlite.MaybeTLSConnectionState(maybeTLSConn)
-	hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(zeroTime), "tcp", address, tlsConfig,
-		connState, err, finish.Sub(zeroTime))
-	hs.ECHConfig = ecl.Base64()
-	hs.OuterServerName = string(ecl.Configs[0].PublicName)
-	return hs
-}
-
-func handshakeWithExtension(ctx context.Context, conn net.Conn, zeroTime time.Time, address string, target *url.URL,
-	extensions []utls.TLSExtension, logger model.Logger) *model.ArchivalTLSOrQUICHandshakeResult {
-
-	tlsConfig := genTLSConfig(target.Hostname())
-
-	handshakerConstructor := newHandshakerWithExtensions(extensions)
-	tracedHandshaker := handshakerConstructor(log.Log, &utls.HelloFirefox_Auto)
-
-	ol := logx.NewOperationLogger(logger, "echcheck: TLSHandshake%s", handshakeMaybePrintWithECH(len(extensions) > 0))
-	start := time.Now()
-	maybeTLSConn, err := tracedHandshaker.Handshake(ctx, conn, tlsConfig)
-	finish := time.Now()
-	ol.Stop(err)
-
-	connState := netxlite.MaybeTLSConnectionState(maybeTLSConn)
-	return measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(zeroTime), "tcp", address, tlsConfig,
-		connState, err, finish.Sub(zeroTime))
-}
-
-// We are creating the pool just once because there is a performance penalty
-// when creating it every time. See https://github.com/ooni/probe/issues/2413.
-var certpool = netxlite.NewMozillaCertPool()
-
-// genTLSConfig generates tls.Config from a given SNI
-func genTLSConfig(sni string) *tls.Config {
-	return &tls.Config{ // #nosec G402 - we need to use a large TLS versions range for measuring
-		RootCAs:            certpool,
-		ServerName:         sni,
-		NextProtos:         []string{"h2", "http/1.1"},
-		InsecureSkipVerify: true, // #nosec G402 - it's fine to skip verify in a nettest
-	}
-}
-
-func genEchTLSConfig(host string, ecl echConfigList) *tls.Config {
 	return &tls.Config{
-		EncryptedClientHelloConfigList: ecl.raw,
+		EncryptedClientHelloConfigList: echConfigList,
 		// This will be used as the inner SNI and we will validate
 		// we get a certificate for this name.  The outer SNI will
 		// be set based on the ECH config.

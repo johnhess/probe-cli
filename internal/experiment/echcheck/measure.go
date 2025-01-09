@@ -2,6 +2,7 @@ package echcheck
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -83,22 +84,23 @@ func (m *Measurer) Run(
 	if httpsErr != nil {
 		return httpsErr
 	}
-	rawEchConfig := httpsRr.Ech
-	ecl, err := parseRawEchConfig(rawEchConfig)
+	realEchConfig := httpsRr.Ech
+	configs, err := parseECHConfigList(realEchConfig)
 	if err != nil {
 		return fmt.Errorf("failed to parse ECH config: %w", err)
 	}
-	if len(ecl.Configs) == 0 {
-		return fmt.Errorf("no ECH configs for %s", parsed.Host)
-	}
-	outerServerName := string(ecl.Configs[0].PublicName)
-	for _, ec := range ecl.Configs {
+	outerServerName := string(configs[0].PublicName)
+	for _, ec := range configs {
 		if string(ec.PublicName) != outerServerName {
 			// It's perfectly valid to have multiple ECH configs with different
 			// `PublicName`s. But, since we can't see which one is selected by
 			// go's tls package, we can't accurately record OuterServerName.
 			return fmt.Errorf("ambigious OuterServerName for %s", parsed.Host)
 		}
+	}
+	grease, err := generateGreaseyECHConfigList(crand.Reader, parsed.Hostname())
+	if err != nil {
+		return fmt.Errorf("failed to generate GREASE ECH config: %w", err)
 	}
 
 	runtimex.Assert(len(addrs) > 0, "expected at least one entry in addrs")
@@ -109,21 +111,25 @@ func (m *Measurer) Run(
 	address := net.JoinHostPort(addrs[0], port)
 
 	handshakes := []func() (chan model.ArchivalTLSOrQUICHandshakeResult, error){
+		// TODO: Replace useRetryConfigs with outer ServerName or isGrease.  If GREASE
+		// then retry is okay.
 		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, NoECH, echConfigList{}, args.Measurement.MeasurementStartTimeSaved,
+			return attemptHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 
 		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, GreaseECH, echConfigList{}, args.Measurement.MeasurementStartTimeSaved,
+			return attemptHandshake(ctx, grease, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 
 		// Use real ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, RealECH, ecl, args.Measurement.MeasurementStartTimeSaved,
+			// Don't use retry configs for the real ECH config.  We want to catch
+			// cases where the distributed ones don't work.
+			return attemptHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 	}
