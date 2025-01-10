@@ -54,12 +54,12 @@ var All = map[string]Group{
 	"experimental": {
 		Label: "Experimental Nettests",
 		Nettests: []Nettest{
-			// DNSCheck{}, // Seems to lookup the actual DNS servers URL using DNS?
+			DNSCheck{},
 			ECHCheck{},
-			// STUNReachability{},
-			// OpenVPN{},
-			// TorSf{},
-			// VanillaTor{},
+			STUNReachability{},
+			OpenVPN{},
+			TorSf{},
+			VanillaTor{},
 		},
 		UnattendedOK: true,
 	},
