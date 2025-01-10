@@ -66,7 +66,6 @@ func TestGREASEyEchHandshake(t *testing.T) {
 	tlsConfig := &tls.Config{
 		EncryptedClientHelloConfigList: ecl,
 		ServerName:                     parsed.Hostname(),
-		InsecureSkipVerify:             true,
 		RootCAs:                        testPool,
 	}
 
