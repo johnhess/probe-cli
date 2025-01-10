@@ -33,8 +33,7 @@ func TestNoEchHandshake(t *testing.T) {
 		RootCAs:            testPool,
 	}
 
-	fmt.Printf("parsed: %v\n", parsed.Host)
-	result := handshake([]byte{}, false, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+	result := handshake([]byte{}, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
 
 	if result.SoError != nil {
 		t.Fatal("did not expect error, got: ", result.SoError)
@@ -45,7 +44,7 @@ func TestNoEchHandshake(t *testing.T) {
 	}
 
 }
-func TestGREASEyEchHandshake(t *testing.T) {
+func TestFailToEstablishECHHandshake(t *testing.T) {
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "success")
 	}))
@@ -69,8 +68,9 @@ func TestGREASEyEchHandshake(t *testing.T) {
 		RootCAs:                        testPool,
 	}
 
-	fmt.Printf("parsed: %v\n", parsed.Host)
-	result := handshake([]byte{}, false, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+	// We're using a GREASE ECHConfigList, but we'll handle it as if it's a genuine one (isGrease=False)
+	// Test server doesn't handle ECH yet, so it wouldn't send retry configs anyways.
+	result := handshake(ecl, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
 
 	if result.SoError != nil {
 		t.Fatal("did not expect error, got: ", result.SoError)

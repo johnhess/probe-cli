@@ -28,7 +28,6 @@ func attemptHandshake(
 	ctx context.Context,
 	echConfigList []byte,
 	isGrease bool,
-	useRetryConfigs bool,
 	startTime time.Time,
 	address string,
 	target *url.URL,
@@ -47,7 +46,7 @@ func attemptHandshake(
 	tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
 
 	go func() {
-		hs := handshake(echConfigList, isGrease, useRetryConfigs, startTime, address, target, logger, tlsConfig)
+		hs := handshake(echConfigList, isGrease, startTime, address, target, logger, tlsConfig)
 		channel <- *hs
 	}()
 
@@ -56,7 +55,6 @@ func attemptHandshake(
 
 func handshake(echConfigList []byte,
 	isGrease bool,
-	useRetryConfigs bool,
 	startTime time.Time,
 	address string,
 	target *url.URL,
@@ -73,8 +71,7 @@ func handshake(echConfigList []byte,
 	ol := logx.NewOperationLogger(logger, "echcheck: DialTLS%s", d)
 	start := time.Now()
 	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
-	if echErr, ok := err.(*tls.ECHRejectionError); ok && useRetryConfigs {
-		// This is a special case where the server rejected the ECH as expected.
+	if echErr, ok := err.(*tls.ECHRejectionError); ok && isGrease {
 		newTLSConfig := genEchTLSConfig(target.Hostname(), echErr.RetryConfigList)
 		maybeTLSConn, err = tls.Dial("tcp", address, newTLSConfig)
 	}
