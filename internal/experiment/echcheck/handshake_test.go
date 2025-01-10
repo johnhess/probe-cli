@@ -44,6 +44,10 @@ func TestNoEchHandshake(t *testing.T) {
 		t.Fatal("did not expect error, got: ", *result.Failure)
 	}
 
+	if result.OuterServerName != "" {
+		t.Fatal("expected OuterServerName to be empty, got: ", result.OuterServerName)
+	}
+
 }
 func TestFailToEstablishECHHandshake(t *testing.T) {
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,10 +77,6 @@ func TestFailToEstablishECHHandshake(t *testing.T) {
 	// Test server doesn't handle ECH yet, so it wouldn't send retry configs anyways.
 	result := handshake(ecl, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
 
-	// These are necessarily the same value; test server doesn't support ECH yet.
-	if result.OuterServerName != parsed.Hostname() {
-		t.Fatal("expected OuterServerName to be set to ts.URL.Hostname(), got: ", result.OuterServerName)
-	}
 	if result.ServerName != parsed.Hostname() {
 		t.Fatal("expected ServerName to be set to ts.URL.Hostname(), got: ", result.ServerName)
 	}

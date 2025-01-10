@@ -89,6 +89,7 @@ func (m *Measurer) Run(
 	if err != nil {
 		return fmt.Errorf("failed to parse ECH config: %w", err)
 	}
+	// outerServerName is Populated in results when ECH is used.
 	outerServerName := string(configs[0].PublicName)
 	for _, ec := range configs {
 		if string(ec.PublicName) != outerServerName {
@@ -114,19 +115,19 @@ func (m *Measurer) Run(
 		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 			return attemptHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed, args.Session.Logger())
+				address, parsed, "", args.Session.Logger())
 		},
 
 		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 			return attemptHandshake(ctx, grease, true, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed, args.Session.Logger())
+				address, parsed, outerServerName, args.Session.Logger())
 		},
 
 		// Handshake with real ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 			return attemptHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed, args.Session.Logger())
+				address, parsed, outerServerName, args.Session.Logger())
 		},
 	}
 

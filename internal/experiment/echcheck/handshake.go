@@ -31,6 +31,7 @@ func attemptHandshake(
 	startTime time.Time,
 	address string,
 	target *url.URL,
+	outerServerName string,
 	logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 
 	channel := make(chan model.ArchivalTLSOrQUICHandshakeResult)
@@ -47,6 +48,7 @@ func attemptHandshake(
 
 	go func() {
 		hs := handshake(echConfigList, isGrease, startTime, address, target, logger, tlsConfig)
+		hs.OuterServerName = outerServerName
 		channel <- *hs
 	}()
 
@@ -95,14 +97,6 @@ func handshake(echConfigList []byte,
 		hs.ECHConfig = "GREASE"
 	} else {
 		hs.ECHConfig = base64.StdEncoding.EncodeToString(echConfigList)
-	}
-	if len(echConfigList) > 0 {
-		configs, err := parseECHConfigList(echConfigList)
-		if err != nil {
-			// TODO: Handle this.  Move outside handshake fn, I think.
-			panic("failed to parse ECH config list: " + err.Error())
-		}
-		hs.OuterServerName = string(configs[0].PublicName)
 	}
 	return hs
 }
