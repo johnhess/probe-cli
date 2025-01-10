@@ -115,13 +115,13 @@ func (m *Measurer) Run(
 		// then retry is okay.
 		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return attemptHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
+			return attemptHandshake(ctx, []byte{}, false, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 
 		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return attemptHandshake(ctx, grease, false, args.Measurement.MeasurementStartTimeSaved,
+			return attemptHandshake(ctx, grease, true, true, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 
@@ -129,7 +129,7 @@ func (m *Measurer) Run(
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 			// Don't use retry configs for the real ECH config.  We want to catch
 			// cases where the distributed ones don't work.
-			return attemptHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
+			return attemptHandshake(ctx, realEchConfig, false, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, args.Session.Logger())
 		},
 	}

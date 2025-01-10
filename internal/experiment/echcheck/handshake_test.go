@@ -1,9 +1,9 @@
 package echcheck
 
 import (
-	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +13,7 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/model"
 )
 
-func TestHandshake(t *testing.T) {
+func TestNoEchHandshake(t *testing.T) {
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "success")
 	}))
@@ -24,23 +24,19 @@ func TestHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", parsed.Host)
-	if err != nil {
-		t.Fatal(err)
+	testPool := x509.NewCertPool()
+	testPool.AddCert(ts.Certificate())
+	tlsConfig := &tls.Config{
+		// This will be used as the inner SNI and we will validate
+		// we get a certificate for this name.  The outer SNI will
+		// be set based on the ECH config.
+		ServerName:         parsed.Hostname(),
+		InsecureSkipVerify: true,
+		RootCAs:            testPool,
 	}
 
-	target, err := url.Parse("https://crypto.cloudflare.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := handshakeWithGreaseyEch(ctx, conn, time.Now(), parsed.Host, target, model.DiscardLogger)
-	if result == nil {
-		t.Fatal("expected result")
-	}
+	fmt.Printf("parsed: %v\n", parsed.Host)
+	result := handshake([]byte{}, false, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
 
 	if result.SoError != nil {
 		t.Fatal("did not expect error, got: ", result.SoError)
@@ -50,5 +46,4 @@ func TestHandshake(t *testing.T) {
 		t.Fatal("did not expect error, got: ", *result.Failure)
 	}
 
-	conn.Close()
 }

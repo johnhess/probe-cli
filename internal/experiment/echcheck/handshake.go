@@ -27,6 +27,7 @@ const (
 func attemptHandshake(
 	ctx context.Context,
 	echConfigList []byte,
+	isGrease bool,
 	useRetryConfigs bool,
 	startTime time.Time,
 	address string,
@@ -43,43 +44,70 @@ func attemptHandshake(
 		return nil, netxlite.NewErrWrapper(netxlite.ClassifyGenericError, netxlite.ConnectOperation, err)
 	}
 
+	tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
+
 	go func() {
-		tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
-
-		ol := logx.NewOperationLogger(logger, "echcheck: DialTLS")
-		start := time.Now()
-		maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
-		if echErr, ok := err.(*tls.ECHRejectionError); ok && useRetryConfigs {
-			// This is a special case where the server rejected the ECH as expected.
-			newTLSConfig := genEchTLSConfig(target.Hostname(), echErr.RetryConfigList)
-			maybeTLSConn, err = tls.Dial("tcp", address, newTLSConfig)
-		}
-		finish := time.Now()
-		ol.Stop(err)
-
-		var connState tls.ConnectionState
-		if err != nil {
-			connState = tls.ConnectionState{}
-		} else {
-			// If there's been an error, processing maybeTLSConn can panic.
-			connState = netxlite.MaybeTLSConnectionState(maybeTLSConn)
-		}
-		hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(startTime), "tcp", address, tlsConfig,
-			connState, err, finish.Sub(startTime))
-		// TODO: Support "GREASE" as a value here
-		hs.ECHConfig = base64.StdEncoding.EncodeToString(echConfigList)
-		if len(echConfigList) > 0 {
-			configs, err := parseECHConfigList(echConfigList)
-			if err != nil {
-				// TODO: Handle this.
-				panic("failed to parse ECH config list: " + err.Error())
-			}
-			hs.OuterServerName = string(configs[0].PublicName)
-		}
+		hs := handshake(echConfigList, isGrease, useRetryConfigs, startTime, address, target, logger, tlsConfig)
 		channel <- *hs
 	}()
 
 	return channel, nil
+}
+
+func handshake(echConfigList []byte,
+	isGrease bool,
+	useRetryConfigs bool,
+	startTime time.Time,
+	address string,
+	target *url.URL,
+	logger model.Logger,
+	tlsConfig *tls.Config) *model.ArchivalTLSOrQUICHandshakeResult {
+
+	var d string
+	if isGrease {
+		d = "GREASE"
+	} else if len(echConfigList) == 0 {
+		d = "NoECH"
+	} else {
+		d = "RealECH"
+	}
+
+	ol := logx.NewOperationLogger(logger, "echcheck: DialTLS (%s)", d)
+	start := time.Now()
+	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
+	if echErr, ok := err.(*tls.ECHRejectionError); ok && useRetryConfigs {
+		// This is a special case where the server rejected the ECH as expected.
+		newTLSConfig := genEchTLSConfig(target.Hostname(), echErr.RetryConfigList)
+		maybeTLSConn, err = tls.Dial("tcp", address, newTLSConfig)
+	}
+	finish := time.Now()
+	ol.Stop(err)
+
+	var connState tls.ConnectionState
+	// This indicates either the original attempt failed with a non ECH retry
+	// or that the ECH retry failed.
+	if err != nil {
+		connState = tls.ConnectionState{}
+	} else {
+		// If there's been an error, processing maybeTLSConn can panic.
+		connState = netxlite.MaybeTLSConnectionState(maybeTLSConn)
+	}
+	hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(startTime), "tcp", address, tlsConfig,
+		connState, err, finish.Sub(startTime))
+	if isGrease {
+		hs.ECHConfig = "GREASE"
+	} else {
+		hs.ECHConfig = base64.StdEncoding.EncodeToString(echConfigList)
+	}
+	if len(echConfigList) > 0 {
+		configs, err := parseECHConfigList(echConfigList)
+		if err != nil {
+			// TODO: Handle this.  Move outside handshake fn, I think.
+			panic("failed to parse ECH config list: " + err.Error())
+		}
+		hs.OuterServerName = string(configs[0].PublicName)
+	}
+	return hs
 }
 
 func genEchTLSConfig(host string, echConfigList []byte) *tls.Config {
