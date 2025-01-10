@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,12 +73,59 @@ func TestFailToEstablishECHHandshake(t *testing.T) {
 	// Test server doesn't handle ECH yet, so it wouldn't send retry configs anyways.
 	result := handshake(ecl, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
 
+	// These are necessarily the same value; test server doesn't support ECH yet.
+	if result.OuterServerName != parsed.Hostname() {
+		t.Fatal("expected OuterServerName to be set to ts.URL.Hostname(), got: ", result.OuterServerName)
+	}
+	if result.ServerName != parsed.Hostname() {
+		t.Fatal("expected ServerName to be set to ts.URL.Hostname(), got: ", result.ServerName)
+	}
+
 	if result.SoError != nil {
 		t.Fatal("did not expect error, got: ", result.SoError)
 	}
 
-	if result.Failure == nil || (*result.Failure != "unknown_failure: tls: server rejected ECH") {
+	if result.Failure == nil || !strings.Contains(*result.Failure, "tls: server rejected ECH") {
 		t.Fatal("server should have rejected ECH: ", *result.Failure)
+	}
+}
+
+func TestGREASEyECHHandshake(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "success")
+	}))
+	defer ts.Close()
+
+	parsed, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testPool := x509.NewCertPool()
+	testPool.AddCert(ts.Certificate())
+
+	ecl, err := generateGreaseyECHConfigList(rand.Reader, parsed.Hostname())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConfig := &tls.Config{
+		EncryptedClientHelloConfigList: ecl,
+		ServerName:                     parsed.Hostname(),
+		RootCAs:                        testPool,
+	}
+
+	result := handshake(ecl, true, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+
+	if result.ECHConfig != "GREASE" {
+		t.Fatal("expected ECHConfig to be GREASE, got: ", result.ECHConfig)
+	}
+
+	if result.SoError != nil {
+		t.Fatal("did not expect error, got: ", result.SoError)
+	}
+
+	if result.Failure == nil || !strings.Contains(*result.Failure, "tls: server rejected ECH") {
+		t.Fatal("expected Connection to fail because test server doesn't handle ECH yet")
 	}
 }
 

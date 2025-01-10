@@ -72,8 +72,10 @@ func handshake(echConfigList []byte,
 	start := time.Now()
 	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
 	if echErr, ok := err.(*tls.ECHRejectionError); ok && isGrease {
-		newTLSConfig := genEchTLSConfig(target.Hostname(), echErr.RetryConfigList)
-		maybeTLSConn, err = tls.Dial("tcp", address, newTLSConfig)
+		if len(echErr.RetryConfigList) > 0 {
+			tlsConfig.EncryptedClientHelloConfigList = echErr.RetryConfigList
+			maybeTLSConn, err = tls.Dial("tcp", address, tlsConfig)
+		}
 	}
 	finish := time.Now()
 	ol.Stop(err)
