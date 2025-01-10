@@ -10,46 +10,9 @@ import (
 	"golang.org/x/crypto/cryptobyte"
 )
 
+// ECH Config List per:
+// https://www.ietf.org/archive/id/draft-ietf-tls-esni-22.html#name-encrypted-clienthello-confi
 func generateGreaseyECHConfigList(rand io.Reader, publicName string) ([]byte, error) {
-	// From ESNI-22:
-	// opaque HpkePublicKey<1..2^16-1>;
-	// uint16 HpkeKemId;              // Defined in RFC9180
-	// uint16 HpkeKdfId;              // Defined in RFC9180
-	// uint16 HpkeAeadId;             // Defined in RFC9180
-	// uint16 ECHConfigExtensionType; // Defined in Section 11.3
-
-	// struct {
-	//     HpkeKdfId kdf_id;
-	//     HpkeAeadId aead_id;
-	// } HpkeSymmetricCipherSuite;
-
-	// struct {
-	//     uint8 config_id;
-	//     HpkeKemId kem_id;
-	//     HpkePublicKey public_key;
-	//     HpkeSymmetricCipherSuite cipher_suites<4..2^16-4>;
-	// } HpkeKeyConfig;
-
-	// struct {
-	//     ECHConfigExtensionType type;
-	//     opaque data<0..2^16-1>;
-	// } ECHConfigExtension;
-
-	// struct {
-	//     HpkeKeyConfig key_config;
-	//     uint8 maximum_name_length;
-	//     opaque public_name<1..255>;
-	//     ECHConfigExtension extensions<0..2^16-1>;
-	// } ECHConfigContents;
-
-	// struct {
-	//     uint16 version;
-	//     uint16 length;
-	//     select (ECHConfig.version) {
-	//       case 0xfe0d: ECHConfigContents contents;
-	//     }
-	// } ECHConfig;
-
 	// Start ECHConfig
 	var c cryptobyte.Builder
 	version := uint16(0xfe0d)
