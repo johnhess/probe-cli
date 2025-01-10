@@ -66,18 +66,21 @@ func (m *Measurer) Run(
 		return errInvalidInputScheme
 	}
 
-	// 1. perform a DNSLookup
-	ol := logx.NewOperationLogger(args.Session.Logger(), "echcheck: DNSLookup[%s] %s", m.config.resolverURL(), parsed.Host)
+	// DNS Lookups for Address and HTTPS RR
+	ol := logx.NewOperationLogger(args.Session.Logger(), "echcheck: DNSLookups[%s] %s", m.config.resolverURL(), parsed.Host)
 	trace := measurexlite.NewTrace(0, args.Measurement.MeasurementStartTimeSaved)
 	resolver := trace.NewParallelDNSOverHTTPSResolver(args.Session.Logger(), m.config.resolverURL())
 	// We dial the alias, even when there are hints in the HTTPS record.
 	addrs, addrsErr := resolver.LookupHost(ctx, parsed.Hostname())
+	// Port prefixing per:
+	// https://www.rfc-editor.org/rfc/rfc9460.html#name-query-names-for-https-rrs
 	var dnsQueryHost = parsed.Hostname()
 	if parsed.Port() != "" && parsed.Port() != "443" {
 		dnsQueryHost = fmt.Sprintf("_%s._https.%s", parsed.Port(), parsed.Hostname())
 	}
 	httpsRr, httpsErr := resolver.LookupHTTPS(ctx, dnsQueryHost)
 	ol.Stop(err)
+
 	if addrsErr != nil {
 		return addrsErr
 	}
@@ -114,19 +117,22 @@ func (m *Measurer) Run(
 	handshakes := []func() (chan model.ArchivalTLSOrQUICHandshakeResult, error){
 		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, []byte{}, false,
+				args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, "", args.Session.Logger())
 		},
 
 		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, grease, true, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, grease, true,
+				args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, outerServerName, args.Session.Logger())
 		},
 
 		// Handshake with real ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, realEchConfig, false,
+				args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, outerServerName, args.Session.Logger())
 		},
 	}

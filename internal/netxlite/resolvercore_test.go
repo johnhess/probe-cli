@@ -712,7 +712,6 @@ func TestResolverIDNA(t *testing.T) {
 					return nil, errors.New("should not happen")
 				},
 			}}
-			// See https://www.farsightsecurity.com/blog/txt-record/punycode-20180711/
 			ctx := context.Background()
 			https, err := r.LookupHTTPS(ctx, "_asdf._https.foo.bar")
 			if err == nil || !strings.HasPrefix(err.Error(), "invalid domain:") {
