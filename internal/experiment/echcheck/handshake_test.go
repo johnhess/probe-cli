@@ -1,10 +1,12 @@
 package echcheck
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,7 +37,12 @@ func TestNoEchHandshake(t *testing.T) {
 		RootCAs:            testPool,
 	}
 
-	result := handshake([]byte{}, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+	ctx := context.Background()
+	conn, err := net.Dial("tcp", parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := handshake(ctx, conn, []byte{}, false, time.Now(), parsed.Host, model.DiscardLogger, tlsConfig)
 
 	if result.SoError != nil {
 		t.Fatal("did not expect error, got: ", result.SoError)
@@ -76,7 +83,12 @@ func TestFailToEstablishECHHandshake(t *testing.T) {
 
 	// We're using a GREASE ECHConfigList, but we'll handle it as if it's a genuine one (isGrease=False)
 	// Test server doesn't handle ECH yet, so it wouldn't send retry configs anyways.
-	result := handshake(ecl, false, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+	ctx := context.Background()
+	conn, err := net.Dial("tcp", parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := handshake(ctx, conn, ecl, false, time.Now(), parsed.Host, model.DiscardLogger, tlsConfig)
 
 	if result.ServerName != parsed.Hostname() {
 		t.Fatal("expected ServerName to be set to ts.URL.Hostname(), got: ", result.ServerName)
@@ -115,7 +127,12 @@ func TestGREASEyECHHandshake(t *testing.T) {
 		RootCAs:                        testPool,
 	}
 
-	result := handshake(ecl, true, time.Now(), parsed.Host, parsed, model.DiscardLogger, tlsConfig)
+	ctx := context.Background()
+	conn, err := net.Dial("tcp", parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := handshake(ctx, conn, ecl, true, time.Now(), parsed.Host, model.DiscardLogger, tlsConfig)
 
 	if result.ECHConfig != "GREASE" {
 		t.Fatal("expected ECHConfig to be GREASE, got: ", result.ECHConfig)

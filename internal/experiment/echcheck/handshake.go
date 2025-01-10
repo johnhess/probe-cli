@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"net"
 	"net/url"
 	"time"
 
@@ -27,10 +28,18 @@ func connectAndHandshake(
 
 	channel := make(chan model.ArchivalTLSOrQUICHandshakeResult)
 
+	ol := logx.NewOperationLogger(logger, "echcheck: TCPConnect %s", address)
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	ol.Stop(err)
+	if err != nil {
+		return nil, netxlite.NewErrWrapper(netxlite.ClassifyGenericError, netxlite.ConnectOperation, err)
+	}
+
 	tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
 
 	go func() {
-		hs := handshake(echConfigList, isGrease, startTime, address, target, logger, tlsConfig)
+		hs := handshake(ctx, conn, echConfigList, isGrease, startTime, address, logger, tlsConfig)
 		hs.OuterServerName = outerServerName
 		channel <- *hs
 	}()
@@ -38,24 +47,19 @@ func connectAndHandshake(
 	return channel, nil
 }
 
-func handshake(echConfigList []byte,
-	isGrease bool,
-	startTime time.Time,
-	address string,
-	target *url.URL,
-	logger model.Logger,
-	tlsConfig *tls.Config) *model.ArchivalTLSOrQUICHandshakeResult {
-
+func handshake(ctx context.Context, conn net.Conn, echConfigList []byte, isGrease bool, startTime time.Time, address string, logger model.Logger, tlsConfig *tls.Config) *model.ArchivalTLSOrQUICHandshakeResult {
 	var d string
 	if isGrease {
 		d = " (GREASE)"
 	} else if len(echConfigList) > 0 {
 		d = " (RealECH)"
 	}
-
 	ol := logx.NewOperationLogger(logger, "echcheck: DialTLS%s", d)
 	start := time.Now()
-	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
+
+	maybeTLSConn := tls.Client(conn, tlsConfig)
+	err := maybeTLSConn.HandshakeContext(ctx)
+
 	if echErr, ok := err.(*tls.ECHRejectionError); ok && isGrease {
 		if len(echErr.RetryConfigList) > 0 {
 			tlsConfig.EncryptedClientHelloConfigList = echErr.RetryConfigList
