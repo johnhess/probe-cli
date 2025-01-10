@@ -65,14 +65,12 @@ func handshake(echConfigList []byte,
 
 	var d string
 	if isGrease {
-		d = "GREASE"
-	} else if len(echConfigList) == 0 {
-		d = "NoECH"
-	} else {
-		d = "RealECH"
+		d = " (GREASE)"
+	} else if len(echConfigList) > 0 {
+		d = " (RealECH)"
 	}
 
-	ol := logx.NewOperationLogger(logger, "echcheck: DialTLS (%s)", d)
+	ol := logx.NewOperationLogger(logger, "echcheck: DialTLS%s", d)
 	start := time.Now()
 	maybeTLSConn, err := tls.Dial("tcp", address, tlsConfig)
 	if echErr, ok := err.(*tls.ECHRejectionError); ok && useRetryConfigs {
