@@ -15,6 +15,7 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/model"
 )
 
+// TODO: Refactor these tests to DRY them.
 func TestNoEchHandshake(t *testing.T) {
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "success")

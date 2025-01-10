@@ -114,19 +114,19 @@ func (m *Measurer) Run(
 	handshakes := []func() (chan model.ArchivalTLSOrQUICHandshakeResult, error){
 		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return attemptHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, []byte{}, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, "", args.Session.Logger())
 		},
 
 		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return attemptHandshake(ctx, grease, true, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, grease, true, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, outerServerName, args.Session.Logger())
 		},
 
 		// Handshake with real ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return attemptHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
+			return connectAndHandshake(ctx, realEchConfig, false, args.Measurement.MeasurementStartTimeSaved,
 				address, parsed, outerServerName, args.Session.Logger())
 		},
 	}

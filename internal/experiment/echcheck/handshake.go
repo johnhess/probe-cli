@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"net"
 	"net/url"
 	"time"
 
@@ -14,17 +13,9 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/netxlite"
 )
 
-const echExtensionType uint16 = 0xfe0d
-
-type EchMode int
-
-const (
-	NoECH EchMode = iota
-	GreaseECH
-	RealECH
-)
-
-func attemptHandshake(
+func connectAndHandshake(
+	// TODO: Support cancelling this context during the dial.
+	// Probably use tls.DialWithDialer
 	ctx context.Context,
 	echConfigList []byte,
 	isGrease bool,
@@ -35,14 +26,6 @@ func attemptHandshake(
 	logger model.Logger) (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
 
 	channel := make(chan model.ArchivalTLSOrQUICHandshakeResult)
-
-	ol := logx.NewOperationLogger(logger, "echcheck: TCPConnect %s", address)
-	var dialer net.Dialer
-	_, err := dialer.DialContext(ctx, "tcp", address)
-	ol.Stop(err)
-	if err != nil {
-		return nil, netxlite.NewErrWrapper(netxlite.ClassifyGenericError, netxlite.ConnectOperation, err)
-	}
 
 	tlsConfig := genEchTLSConfig(target.Hostname(), echConfigList)
 
@@ -83,16 +66,14 @@ func handshake(echConfigList []byte,
 	ol.Stop(err)
 
 	var connState tls.ConnectionState
-	// This indicates either the original attempt failed with a non ECH retry
-	// or that the ECH retry failed.
+	// If there's been an error, processing maybeTLSConn can panic.
 	if err != nil {
 		connState = tls.ConnectionState{}
 	} else {
-		// If there's been an error, processing maybeTLSConn can panic.
 		connState = netxlite.MaybeTLSConnectionState(maybeTLSConn)
 	}
-	hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(startTime), "tcp", address, tlsConfig,
-		connState, err, finish.Sub(startTime))
+	hs := measurexlite.NewArchivalTLSOrQUICHandshakeResult(0, start.Sub(startTime),
+		"tcp", address, tlsConfig, connState, err, finish.Sub(startTime))
 	if isGrease {
 		hs.ECHConfig = "GREASE"
 	} else {

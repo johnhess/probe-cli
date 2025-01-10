@@ -34,6 +34,9 @@ func generateGreaseyECHConfigList(rand io.Reader, publicName string) ([]byte, er
 		return nil, err
 	}
 	publicKeyBytes, err := publicKey.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
 	ecc.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
 		b.AddBytes(publicKeyBytes)
 	})
