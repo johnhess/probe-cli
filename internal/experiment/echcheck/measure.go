@@ -2,8 +2,10 @@ package echcheck
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
-	"math/rand"
+	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/url"
 
@@ -15,7 +17,7 @@ import (
 
 const (
 	testName    = "echcheck"
-	testVersion = "0.2.0"
+	testVersion = "0.3.0"
 	defaultURL  = "https://cloudflare-ech.com/cdn-cgi/trace"
 )
 
@@ -52,6 +54,7 @@ func (m *Measurer) Run(
 	ctx context.Context,
 	args *model.ExperimentArgs,
 ) error {
+
 	if args.Measurement.Input == "" {
 		args.Measurement.Input = defaultURL
 	}
@@ -63,33 +66,74 @@ func (m *Measurer) Run(
 		return errInvalidInputScheme
 	}
 
-	// 1. perform a DNSLookup
-	ol := logx.NewOperationLogger(args.Session.Logger(), "echcheck: DNSLookup[%s] %s", m.config.resolverURL(), parsed.Host)
+	// DNS Lookups for Address and HTTPS RR
+	ol := logx.NewOperationLogger(args.Session.Logger(), "echcheck: DNSLookups[%s] %s", m.config.resolverURL(), parsed.Host)
 	trace := measurexlite.NewTrace(0, args.Measurement.MeasurementStartTimeSaved)
 	resolver := trace.NewParallelDNSOverHTTPSResolver(args.Session.Logger(), m.config.resolverURL())
-	addrs, err := resolver.LookupHost(ctx, parsed.Host)
-	ol.Stop(err)
-	if err != nil {
-		return err
+	// We dial the alias, even when there are hints in the HTTPS record.
+	addrs, addrsErr := resolver.LookupHost(ctx, parsed.Hostname())
+	// Port prefixing per:
+	// https://www.rfc-editor.org/rfc/rfc9460.html#name-query-names-for-https-rrs
+	var dnsQueryHost = parsed.Hostname()
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		dnsQueryHost = fmt.Sprintf("_%s._https.%s", parsed.Port(), parsed.Hostname())
 	}
+	httpsRr, httpsErr := resolver.LookupHTTPS(ctx, dnsQueryHost)
+	ol.Stop(err)
+
+	if addrsErr != nil {
+		return addrsErr
+	}
+	if httpsErr != nil {
+		return httpsErr
+	}
+	realEchConfig := httpsRr.Ech
+	configs, err := parseECHConfigList(realEchConfig)
+	if err != nil {
+		return fmt.Errorf("failed to parse ECH config: %w", err)
+	}
+	// outerServerName is Populated in results when ECH is used.
+	outerServerName := string(configs[0].PublicName)
+	for _, ec := range configs {
+		if string(ec.PublicName) != outerServerName {
+			// It's perfectly valid to have multiple ECH configs with different
+			// `PublicName`s. But, since we can't see which one is selected by
+			// go's tls package, we can't accurately record OuterServerName.
+			return fmt.Errorf("ambigious OuterServerName for %s", parsed.Host)
+		}
+	}
+	grease, err := generateGreaseyECHConfigList(crand.Reader, parsed.Hostname())
+	if err != nil {
+		return fmt.Errorf("failed to generate GREASE ECH config: %w", err)
+	}
+
 	runtimex.Assert(len(addrs) > 0, "expected at least one entry in addrs")
-	address := net.JoinHostPort(addrs[0], "443")
+	port := parsed.Port()
+	if port == "" {
+		port = "443"
+	}
+	address := net.JoinHostPort(addrs[0], port)
 
 	handshakes := []func() (chan model.ArchivalTLSOrQUICHandshakeResult, error){
-		// handshake with ECH disabled and SNI coming from the URL
+		// Handshake with no ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed.Host, "", args.Session.Logger())
+			return connectAndHandshake(ctx, []byte{}, false,
+				args.Measurement.MeasurementStartTimeSaved,
+				address, parsed, "", args.Session.Logger())
 		},
-		// handshake with ECH enabled and ClientHelloOuter SNI coming from the URL
+
+		// Handshake with ECH GREASE
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed.Host, parsed.Host, args.Session.Logger())
+			return connectAndHandshake(ctx, grease, true,
+				args.Measurement.MeasurementStartTimeSaved,
+				address, parsed, outerServerName, args.Session.Logger())
 		},
-		// handshake with ECH enabled and hardcoded different ClientHelloOuter SNI
+
+		// Handshake with real ECH
 		func() (chan model.ArchivalTLSOrQUICHandshakeResult, error) {
-			return connectAndHandshake(ctx, args.Measurement.MeasurementStartTimeSaved,
-				address, parsed.Host, "cloudflare.com", args.Session.Logger())
+			return connectAndHandshake(ctx, realEchConfig, false,
+				args.Measurement.MeasurementStartTimeSaved,
+				address, parsed, outerServerName, args.Session.Logger())
 		},
 	}
 
